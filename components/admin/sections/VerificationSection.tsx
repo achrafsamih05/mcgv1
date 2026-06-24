@@ -25,6 +25,7 @@ const roleMeta: Record<PlatformRole, { label: string; icon: typeof Truck }> = {
   DRIVER: { label: "Carrier / Driver", icon: Truck },
   WAREHOUSE_HOST: { label: "Warehouse Host", icon: Warehouse },
   SUPER_ADMIN: { label: "Administrator", icon: BadgeCheck },
+  ADMIN: { label: "Administrator", icon: BadgeCheck },
 };
 
 export function VerificationSection() {

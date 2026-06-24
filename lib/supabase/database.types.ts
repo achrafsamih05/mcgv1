@@ -17,7 +17,8 @@ export type PlatformRole =
   | "SUPPLIER"
   | "DRIVER"
   | "WAREHOUSE_HOST"
-  | "SUPER_ADMIN";
+  | "SUPER_ADMIN"
+  | "ADMIN";
 
 export type VerificationStatus = "PENDING" | "APPROVED" | "REJECTED";
 

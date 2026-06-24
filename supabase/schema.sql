@@ -39,6 +39,17 @@ begin
     );
   end if;
 
+  -- Recognize a generic 'ADMIN' role alongside 'SUPER_ADMIN' (idempotent).
+  -- Added non-destructively so existing data and ordering are preserved.
+  if exists (select 1 from pg_type where typname = 'platform_role')
+     and not exists (
+       select 1 from pg_enum e
+       join pg_type t on t.oid = e.enumtypid
+       where t.typname = 'platform_role' and e.enumlabel = 'ADMIN'
+     ) then
+    alter type public.platform_role add value 'ADMIN';
+  end if;
+
   if not exists (select 1 from pg_type where typname = 'verification_status') then
     create type public.verification_status as enum (
       'PENDING', 'APPROVED', 'REJECTED'
@@ -305,7 +316,7 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.profiles
-    where id = auth.uid() and role = 'SUPER_ADMIN'
+    where id = auth.uid() and role in ('SUPER_ADMIN', 'ADMIN')
   );
 $$;
 

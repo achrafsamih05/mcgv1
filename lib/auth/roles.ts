@@ -8,7 +8,8 @@ export type UserRole =
   | "SUPPLIER"
   | "DRIVER"
   | "WAREHOUSE_HOST"
-  | "SUPER_ADMIN";
+  | "SUPER_ADMIN"
+  | "ADMIN";
 
 /** Role-specific field keys used to drive dynamic validation. */
 export type FieldKey =
@@ -107,4 +108,5 @@ export const ROLE_REDIRECT: Record<UserRole, string> = {
   DRIVER: "/logistics",
   WAREHOUSE_HOST: "/warehouse",
   SUPER_ADMIN: "/admin",
+  ADMIN: "/admin",
 };

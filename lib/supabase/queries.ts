@@ -547,3 +547,69 @@ export async function countPendingCargoOffers(db: DB): Promise<Result<number>> {
     .is("carrier_id", null);
   return error ? fail(error.message) : ok(count ?? 0);
 }
+
+// ===========================================================================
+//  Super Admin — global, cross-tenant aggregates & oversight
+// ===========================================================================
+
+/** Count of profiles for a given role (admin global view). */
+export async function countProfilesByRole(
+  db: DB,
+  role: Database["public"]["Enums"]["platform_role"]
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("profiles")
+    .select("*", { count: "exact", head: true })
+    .eq("role", role);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of RFQs in a given status (admin global view). */
+export async function countRfqsByStatus(
+  db: DB,
+  status: Database["public"]["Enums"]["rfq_status"]
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("rfqs")
+    .select("*", { count: "exact", head: true })
+    .eq("status", status);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of shipments at the final delivered stage (8) platform-wide. */
+export async function countCompletedShipmentsGlobal(db: DB): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("shipments")
+    .select("*", { count: "exact", head: true })
+    .eq("current_stage", 8);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Sum of gross_valuation across all deals — the platform financial run-rate. */
+export async function fetchPlatformRunRate(db: DB): Promise<Result<number>> {
+  const { data, error } = await db.from("deals").select("gross_valuation");
+  if (error) return fail(error.message);
+  const total = (data ?? []).reduce(
+    (sum, row) => sum + (row.gross_valuation ?? 0),
+    0
+  );
+  return ok(total);
+}
+
+/** All shipments across every tenant, most recently updated first. */
+export async function fetchAllShipments(db: DB): Promise<Result<Shipment[]>> {
+  const { data, error } = await db
+    .from("shipments")
+    .select("*")
+    .order("updated_at", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+/** All RFQs across every tenant, newest first (admin oversight). */
+export async function fetchAllRfqs(db: DB): Promise<Result<Rfq[]>> {
+  const { data, error } = await db
+    .from("rfqs")
+    .select("*")
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
+}

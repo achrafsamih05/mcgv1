@@ -4,6 +4,9 @@ import type { StatCardData } from "@/lib/admin/types";
 import { StatCard } from "../ui/StatCard";
 import { Panel, PanelHeader } from "../ui/primitives";
 import { BarChart, ChartLegend, DonutChart, LineChart } from "../ui/charts";
+import { LiveMetricsSection } from "./LiveMetricsSection";
+import { VerificationSection } from "./VerificationSection";
+import { GlobalOverseerSection } from "./GlobalOverseerSection";
 
 const userStats: StatCardData[] = [
   { id: "u-total", label: "Total Users", value: "8,412", delta: 12, intent: "accent" },
@@ -34,6 +37,15 @@ const bizStats: StatCardData[] = [
 export function DashboardSection() {
   return (
     <div className="space-y-8">
+      {/* LIVE — global platform metrics (Supabase aggregates) */}
+      <LiveMetricsSection />
+
+      {/* LIVE — pending account verification pipeline */}
+      <VerificationSection />
+
+      {/* LIVE — cross-tenant deal & shipment overseer with stage override */}
+      <GlobalOverseerSection />
+
       {/* Users counters */}
       <section>
         <h2 className="mb-3 text-sm font-semibold text-navy-700">Users Management</h2>

@@ -53,13 +53,14 @@ export async function middleware(request: NextRequest) {
 
   const role = (profile?.role as UserRole | undefined) ?? "BUYER";
   const correctPath = ROLE_REDIRECT[role];
+  const isAdmin = role === "SUPER_ADMIN" || role === "ADMIN";
 
   // 3. Determine which persona root is being requested.
   const requestedSegment = pathname.split("/").filter(Boolean)[0];
   const segmentRole = ROLE_BY_SEGMENT[requestedSegment];
 
-  // 4. Enforce role ↔ segment match. Super Admin may access any persona root.
-  if (segmentRole && role !== "SUPER_ADMIN" && segmentRole !== role) {
+  // 4. Enforce role ↔ segment match. Admins may access any persona root.
+  if (segmentRole && !isAdmin && segmentRole !== role) {
     const url = request.nextUrl.clone();
     url.pathname = correctPath;
     return NextResponse.redirect(url);
