@@ -33,6 +33,8 @@ export type VehicleType = "TRUCK" | "VAN" | "CAR" | "MOTORCYCLE";
 
 export type RfqStatus = "OPEN" | "QUOTED" | "CLOSED";
 
+export type QuotationStatus = "PENDING" | "ACCEPTED" | "REJECTED";
+
 /** Commercial accounts require admin verification before public visibility. */
 export const COMMERCIAL_ROLES: PlatformRole[] = [
   "SUPPLIER",
@@ -61,6 +63,7 @@ export type Profile = {
   status: VerificationStatus;
   import_license_number: string | null;
   country_source: string | null;
+  supplier_category: string | null;
   created_at: string;
 };
 
@@ -114,6 +117,21 @@ export type Quotation = {
   offered_price: number | null;
   dynamic_lead_time: string | null;
   invoice_url: string | null;
+  unit_price: number | null;
+  shipping_lead_time: number | null;
+  notes: string | null;
+  status: QuotationStatus;
+  created_at: string;
+};
+
+export type SupplierProduct = {
+  id: string;
+  supplier_id: string;
+  name: string;
+  description: string | null;
+  moq: number | null;
+  price_range: string | null;
+  image_url: string | null;
   created_at: string;
 };
 
@@ -139,7 +157,19 @@ export type RfqInsert = Omit<Rfq, "id" | "created_at" | "status" | "category"> &
   status?: RfqStatus;
   category?: string | null;
 };
-export type QuotationInsert = Omit<Quotation, "id" | "created_at">;
+export type QuotationInsert = Omit<
+  Quotation,
+  "id" | "created_at" | "status" | "offered_price" | "dynamic_lead_time" | "invoice_url" | "unit_price" | "shipping_lead_time" | "notes"
+> & {
+  status?: QuotationStatus;
+  offered_price?: number | null;
+  dynamic_lead_time?: string | null;
+  invoice_url?: string | null;
+  unit_price?: number | null;
+  shipping_lead_time?: number | null;
+  notes?: string | null;
+};
+export type SupplierProductInsert = Omit<SupplierProduct, "id" | "created_at">;
 
 // --- Joined read shapes ----------------------------------------------------
 export type ProfileBrief = Pick<
@@ -171,6 +201,12 @@ export type Database = {
         Row: Product;
         Insert: ProductInsert;
         Update: Partial<Product>;
+        Relationships: [];
+      };
+      supplier_products: {
+        Row: SupplierProduct;
+        Insert: SupplierProductInsert;
+        Update: Partial<SupplierProduct>;
         Relationships: [];
       };
       warehouses: {
@@ -215,6 +251,7 @@ export type Database = {
       deal_status: DealStatus;
       vehicle_type: VehicleType;
       rfq_status: RfqStatus;
+      quotation_status: QuotationStatus;
     };
   };
 };

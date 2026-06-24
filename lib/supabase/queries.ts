@@ -20,6 +20,7 @@ import type {
   VerificationStatus,
   Warehouse,
   WarehouseWithHost,
+  SupplierProduct,
 } from "./database.types";
 
 export type DB = SupabaseClient<Database>;
@@ -249,12 +250,28 @@ export async function insertQuotation(
   payload: {
     rfq_id: string;
     supplier_id: string;
-    offered_price: number;
-    dynamic_lead_time: string;
-    invoice_url: string | null;
+    unit_price: number;
+    shipping_lead_time: number;
+    notes: string | null;
   }
 ): Promise<Result<Quotation>> {
-  const { data, error } = await db.from("quotations").insert(payload).select().single();
+  // Populate canonical (unit_price/shipping_lead_time/notes) AND legacy
+  // (offered_price/dynamic_lead_time) columns so the accept_deal RPC and the
+  // Importer-side views both resolve correctly.
+  const { data, error } = await db
+    .from("quotations")
+    .insert({
+      rfq_id: payload.rfq_id,
+      supplier_id: payload.supplier_id,
+      unit_price: payload.unit_price,
+      shipping_lead_time: payload.shipping_lead_time,
+      notes: payload.notes,
+      offered_price: payload.unit_price,
+      dynamic_lead_time: String(payload.shipping_lead_time),
+      status: "PENDING",
+    })
+    .select()
+    .single();
   return error ? fail(error.message) : ok(data);
 }
 
@@ -299,4 +316,97 @@ export async function setDealStatus(
     .select()
     .single();
   return error ? fail(error.message) : ok(data);
+}
+
+// ===========================================================================
+//  Supplier (Manufacturer) — catalog + metrics
+// ===========================================================================
+
+/** A supplier's own catalog, newest first. */
+export async function fetchSupplierProducts(
+  db: DB,
+  supplierId: string
+): Promise<Result<SupplierProduct[]>> {
+  const { data, error } = await db
+    .from("supplier_products")
+    .select("*")
+    .eq("supplier_id", supplierId)
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+/** Insert a catalog product owned by the signed-in supplier. */
+export async function insertSupplierProduct(
+  db: DB,
+  payload: {
+    supplier_id: string;
+    name: string;
+    description: string | null;
+    moq: number | null;
+    price_range: string | null;
+    image_url: string | null;
+  }
+): Promise<Result<SupplierProduct>> {
+  const { data, error } = await db
+    .from("supplier_products")
+    .insert(payload)
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
+}
+
+/** Delete a catalog product (RLS enforces supplier ownership). */
+export async function deleteSupplierProduct(
+  db: DB,
+  productId: string
+): Promise<Result<null>> {
+  const { error } = await db.from("supplier_products").delete().eq("id", productId);
+  return error ? fail(error.message) : ok(null);
+}
+
+/** Count of catalog products owned by a supplier. */
+export async function countSupplierProducts(
+  db: DB,
+  supplierId: string
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("supplier_products")
+    .select("*", { count: "exact", head: true })
+    .eq("supplier_id", supplierId);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of quotations a supplier has sent (active = PENDING). */
+export async function countSupplierActiveQuotations(
+  db: DB,
+  supplierId: string
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("quotations")
+    .select("*", { count: "exact", head: true })
+    .eq("supplier_id", supplierId)
+    .eq("status", "PENDING");
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of won deals for a supplier. */
+export async function countSupplierWonDeals(
+  db: DB,
+  supplierId: string
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("deals")
+    .select("*", { count: "exact", head: true })
+    .eq("supplier_id", supplierId);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** OPEN RFQs available for a supplier to bid on. */
+export async function fetchOpenRfqsForBidding(db: DB): Promise<Result<Rfq[]>> {
+  const { data, error } = await db
+    .from("rfqs")
+    .select("*")
+    .eq("status", "OPEN")
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
 }

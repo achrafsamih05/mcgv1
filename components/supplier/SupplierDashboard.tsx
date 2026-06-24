@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SupplierSectionId } from "@/lib/supplier/types";
+import { createClient, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
 import {
   analytics,
   chatThreads,
@@ -14,7 +15,9 @@ import {
 import { SupplierSidebar } from "./SupplierSidebar";
 import { SupplierTopbar } from "./SupplierTopbar";
 import { HomeSection } from "./sections/HomeSection";
+import { SupplierHomeSection } from "./sections/SupplierHomeSection";
 import { CatalogSection } from "./sections/CatalogSection";
+import { LiveCatalogSection } from "./sections/LiveCatalogSection";
 import { RfqSection } from "./sections/RfqSection";
 import { LivePipelineSection } from "./sections/LivePipelineSection";
 import { MessagesSection } from "./sections/MessagesSection";
@@ -24,7 +27,21 @@ import { ProfileSection } from "./sections/ProfileSection";
 export function SupplierDashboard() {
   const [active, setActive] = useState<SupplierSectionId>("home");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [supplierId, setSupplierId] = useState<string | null>(null);
   const session = currentSession;
+
+  // Resolve the live signed-in supplier id for catalog + metrics.
+  useEffect(() => {
+    if (!SUPABASE_CONFIGURED) return;
+    const db = createClient();
+    let mounted = true;
+    db.auth.getUser().then(({ data }) => {
+      if (mounted) setSupplierId(data.user?.id ?? null);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const select = (id: SupplierSectionId) => {
     setActive(id);
@@ -50,8 +67,18 @@ export function SupplierDashboard() {
           onViewStorefront={() => window.open(`/suppliers/${session.supplierId}`, "_blank")}
         />
         <main className="px-4 py-6 sm:px-6">
-          {active === "home" && <HomeSection analytics={analytics} recentRequests={incomingRequests} />}
-          {active === "catalog" && <CatalogSection session={session} seedProducts={products} />}
+          {active === "home" && (
+            <div className="space-y-6">
+              <SupplierHomeSection supplierId={supplierId} />
+              <HomeSection analytics={analytics} recentRequests={incomingRequests} />
+            </div>
+          )}
+          {active === "catalog" && (
+            <div className="space-y-6">
+              <LiveCatalogSection supplierId={supplierId} />
+              <CatalogSection session={session} seedProducts={products} />
+            </div>
+          )}
           {active === "rfq" && (
             <div className="space-y-6">
               <LivePipelineSection />

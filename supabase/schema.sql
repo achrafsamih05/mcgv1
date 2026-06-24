@@ -62,6 +62,12 @@ begin
       'OPEN', 'QUOTED', 'CLOSED'
     );
   end if;
+
+  if not exists (select 1 from pg_type where typname = 'quotation_status') then
+    create type public.quotation_status as enum (
+      'PENDING', 'ACCEPTED', 'REJECTED'
+    );
+  end if;
 end$$;
 
 
@@ -89,6 +95,8 @@ comment on table public.profiles is
 -- onboarding fields existed.
 alter table public.profiles add column if not exists import_license_number text;
 alter table public.profiles add column if not exists country_source text;
+-- Supplier (Manufacturer) onboarding field — primary product categories.
+alter table public.profiles add column if not exists supplier_category text;
 
 -- 3.2 products — owned by a SUPPLIER profile (Req 3.1)
 create table if not exists public.products (
@@ -113,6 +121,18 @@ create table if not exists public.warehouses (
   available_area_m2     numeric,
   price_per_m2_monthly  numeric,
   created_at            timestamptz not null default now()
+);
+
+-- 3.3 supplier_products — supplier catalog (Supplier persona)
+create table if not exists public.supplier_products (
+  id           uuid primary key default gen_random_uuid(),
+  supplier_id  uuid not null references public.profiles (id) on delete cascade,
+  name         text not null,
+  description  text,
+  moq          integer,
+  price_range  text,
+  image_url    text,
+  created_at   timestamptz not null default now()
 );
 
 -- 3.4 drivers_metadata — id is BOTH PK and FK to a DRIVER profile (Req 3.3)
@@ -152,6 +172,13 @@ create table if not exists public.quotations (
   created_at        timestamptz not null default now()
 );
 
+-- Idempotent column backfill — canonical Supplier-bidding columns. Kept
+-- alongside the legacy offered_price/dynamic_lead_time for the deal RPC.
+alter table public.quotations add column if not exists unit_price numeric;
+alter table public.quotations add column if not exists shipping_lead_time integer;
+alter table public.quotations add column if not exists notes text;
+alter table public.quotations add column if not exists status public.quotation_status not null default 'PENDING';
+
 -- 3.7 deals — contracted transaction binding buyer/supplier/quote (Req 3.6–3.8)
 create table if not exists public.deals (
   id              uuid primary key default gen_random_uuid(),
@@ -169,6 +196,7 @@ create table if not exists public.deals (
 
 -- Helpful indexes for the live feeds and pipeline joins.
 create index if not exists idx_products_supplier   on public.products (supplier_id);
+create index if not exists idx_supplier_products    on public.supplier_products (supplier_id);
 create index if not exists idx_warehouses_host      on public.warehouses (host_id);
 create index if not exists idx_rfqs_buyer           on public.rfqs (buyer_id);
 create index if not exists idx_quotations_rfq       on public.quotations (rfq_id);
@@ -264,6 +292,7 @@ declare
   v_buyer_id  uuid;
   v_caller    uuid := auth.uid();
   v_deal      public.deals%rowtype;
+  v_price     numeric;
 begin
   -- Resolve the quotation.
   select * into v_quote from public.quotations where id = p_quote_id;
@@ -282,10 +311,15 @@ begin
     raise exception 'Not authorized to accept this quotation' using errcode = 'insufficient_privilege';
   end if;
 
+  -- Resolve the effective price (canonical unit_price falls back to legacy
+  -- offered_price) so the RPC works for both Supplier-side and Importer-side
+  -- quotation shapes.
+  v_price := coalesce(v_quote.unit_price, v_quote.offered_price);
+
   -- Req 12.4: offered price must be a valid monetary amount.
-  if v_quote.offered_price is null
-     or v_quote.offered_price < 0.01
-     or v_quote.offered_price > 999999999.99 then
+  if v_price is null
+     or v_price < 0.01
+     or v_price > 999999999.99 then
     raise exception 'Quotation has an invalid offered price' using errcode = 'check_violation';
   end if;
 
@@ -294,10 +328,13 @@ begin
     raise exception 'A deal already exists for quotation %', p_quote_id using errcode = 'unique_violation';
   end if;
 
-  -- Req 12.2/12.3/12.5: create the deal atomically.
+  -- Req 12.2/12.3/12.5: create the deal atomically. Mark the quotation ACCEPTED.
   insert into public.deals (buyer_id, supplier_id, quote_id, gross_valuation, status)
-  values (v_buyer_id, v_quote.supplier_id, p_quote_id, v_quote.offered_price, 'OPEN')
+  values (v_buyer_id, v_quote.supplier_id, p_quote_id, v_price, 'OPEN')
   returning * into v_deal;
+
+  update public.quotations set status = 'ACCEPTED' where id = p_quote_id;
+  update public.rfqs set status = 'CLOSED' where id = v_quote.rfq_id;
 
   return v_deal;
 end;
@@ -312,6 +349,7 @@ grant execute on function public.accept_deal(uuid) to authenticated;
 -- ---------------------------------------------------------------------------
 alter table public.profiles         enable row level security;
 alter table public.products         enable row level security;
+alter table public.supplier_products enable row level security;
 alter table public.warehouses       enable row level security;
 alter table public.drivers_metadata enable row level security;
 alter table public.rfqs             enable row level security;
@@ -364,6 +402,27 @@ create policy products_select on public.products
 
 drop policy if exists products_write on public.products;
 create policy products_write on public.products
+  for all
+  using (supplier_id = auth.uid() or public.is_super_admin())
+  with check (supplier_id = auth.uid() or public.is_super_admin());
+
+-- 7.2b supplier_products ---------------------------------------------------
+-- Catalog rows are publicly readable when the owning supplier is APPROVED;
+-- owners and admins always see their own. Owners have full write control.
+drop policy if exists supplier_products_select on public.supplier_products;
+create policy supplier_products_select on public.supplier_products
+  for select
+  using (
+    public.is_super_admin()
+    or supplier_id = auth.uid()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = supplier_products.supplier_id and p.status = 'APPROVED'
+    )
+  );
+
+drop policy if exists supplier_products_write on public.supplier_products;
+create policy supplier_products_write on public.supplier_products
   for all
   using (supplier_id = auth.uid() or public.is_super_admin())
   with check (supplier_id = auth.uid() or public.is_super_admin());
@@ -536,6 +595,13 @@ begin
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'warehouses'
     ) then
       alter publication supabase_realtime add table public.warehouses;
+    end if;
+    -- supplier_products
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'supplier_products'
+    ) then
+      alter publication supabase_realtime add table public.supplier_products;
     end if;
   end if;
 end$$;

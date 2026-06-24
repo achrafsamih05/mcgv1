@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { FileText, Loader2, Send } from "lucide-react";
 import { createClient, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
-import { fetchOpenRfqs, insertQuotation } from "@/lib/supabase/queries";
+import { fetchOpenRfqsForBidding, insertQuotation } from "@/lib/supabase/queries";
 import { useRealtimeQuery } from "@/lib/supabase/useRealtime";
 import type { Rfq } from "@/lib/supabase/database.types";
 import { Badge, Button, Panel, PanelHeader } from "../ui";
@@ -24,7 +24,7 @@ const emptyQuote: QuoteForm = { offeredPrice: "", leadTimeDays: "" };
 export function LivePipelineSection() {
   const { data: rfqs, loading, error } = useRealtimeQuery<Rfq[]>(
     "rfqs",
-    fetchOpenRfqs,
+    fetchOpenRfqsForBidding,
     []
   );
 
@@ -75,9 +75,9 @@ export function LivePipelineSection() {
     const res = await insertQuotation(db, {
       rfq_id: target.id,
       supplier_id: auth.user.id,
-      offered_price: price,
-      dynamic_lead_time: String(lead),
-      invoice_url: null,
+      unit_price: price,
+      shipping_lead_time: lead,
+      notes: null,
     });
 
     setSubmitting(false);
