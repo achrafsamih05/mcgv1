@@ -35,6 +35,22 @@ export type RfqStatus = "OPEN" | "QUOTED" | "CLOSED";
 
 export type QuotationStatus = "PENDING" | "ACCEPTED" | "REJECTED";
 
+export type VehicleStatus = "AVAILABLE" | "ON_TRIP" | "MAINTENANCE";
+
+/** Ordered 8-stage supply-chain timeline for shipment tracking. */
+export const SHIPMENT_STAGES = [
+  "Task Created",
+  "Accepted",
+  "En Route to Pickup",
+  "Cargo Loaded",
+  "In Transit",
+  "Customs / Hub",
+  "Arrived at Destination",
+  "Delivered",
+] as const;
+
+export type ShipmentStageLabel = (typeof SHIPMENT_STAGES)[number];
+
 /** Commercial accounts require admin verification before public visibility. */
 export const COMMERCIAL_ROLES: PlatformRole[] = [
   "SUPPLIER",
@@ -135,6 +151,28 @@ export type SupplierProduct = {
   created_at: string;
 };
 
+export type Vehicle = {
+  id: string;
+  carrier_id: string;
+  plate_number: string | null;
+  vehicle_type: string | null;
+  max_weight_capacity: number | null;
+  current_status: VehicleStatus;
+  created_at: string;
+};
+
+export type Shipment = {
+  id: string;
+  deal_id: string | null;
+  carrier_id: string | null;
+  vehicle_id: string | null;
+  origin: string | null;
+  destination: string | null;
+  current_stage: number;
+  status_notes: string | null;
+  updated_at: string;
+};
+
 export type Deal = {
   id: string;
   buyer_id: string;
@@ -170,6 +208,12 @@ export type QuotationInsert = Omit<
   notes?: string | null;
 };
 export type SupplierProductInsert = Omit<SupplierProduct, "id" | "created_at">;
+export type VehicleInsert = Omit<Vehicle, "id" | "created_at" | "current_status"> & {
+  current_status?: VehicleStatus;
+};
+export type ShipmentInsert = Omit<Shipment, "id" | "updated_at" | "current_stage"> & {
+  current_stage?: number;
+};
 
 // --- Joined read shapes ----------------------------------------------------
 export type ProfileBrief = Pick<
@@ -239,6 +283,18 @@ export type Database = {
         Update: Partial<Deal>;
         Relationships: [];
       };
+      vehicles: {
+        Row: Vehicle;
+        Insert: VehicleInsert;
+        Update: Partial<Vehicle>;
+        Relationships: [];
+      };
+      shipments: {
+        Row: Shipment;
+        Insert: ShipmentInsert;
+        Update: Partial<Shipment>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -252,6 +308,7 @@ export type Database = {
       vehicle_type: VehicleType;
       rfq_status: RfqStatus;
       quotation_status: QuotationStatus;
+      vehicle_status: VehicleStatus;
     };
   };
 };

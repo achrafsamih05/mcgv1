@@ -68,6 +68,12 @@ begin
       'PENDING', 'ACCEPTED', 'REJECTED'
     );
   end if;
+
+  if not exists (select 1 from pg_type where typname = 'vehicle_status') then
+    create type public.vehicle_status as enum (
+      'AVAILABLE', 'ON_TRIP', 'MAINTENANCE'
+    );
+  end if;
 end$$;
 
 
@@ -194,6 +200,31 @@ create table if not exists public.deals (
   constraint deals_quote_id_unique unique (quote_id)
 );
 
+-- 3.8 vehicles — carrier fleet (Logistics persona)
+create table if not exists public.vehicles (
+  id                  uuid primary key default gen_random_uuid(),
+  carrier_id          uuid not null references public.profiles (id) on delete cascade,
+  plate_number        text,
+  vehicle_type        text,
+  max_weight_capacity numeric,
+  current_status      public.vehicle_status not null default 'AVAILABLE',
+  created_at          timestamptz not null default now()
+);
+
+-- 3.9 shipments — 8-stage supply-chain tracking (Logistics persona)
+create table if not exists public.shipments (
+  id            uuid primary key default gen_random_uuid(),
+  deal_id       uuid references public.deals (id)            on delete set null,
+  carrier_id    uuid references public.profiles (id)         on delete set null,
+  vehicle_id    uuid references public.vehicles (id)         on delete set null,
+  origin        text,
+  destination   text,
+  current_stage integer not null default 1
+                  constraint shipments_stage_range check (current_stage between 1 and 8),
+  status_notes  text,
+  updated_at    timestamptz not null default now()
+);
+
 -- Helpful indexes for the live feeds and pipeline joins.
 create index if not exists idx_products_supplier   on public.products (supplier_id);
 create index if not exists idx_supplier_products    on public.supplier_products (supplier_id);
@@ -203,6 +234,9 @@ create index if not exists idx_quotations_rfq       on public.quotations (rfq_id
 create index if not exists idx_quotations_supplier  on public.quotations (supplier_id);
 create index if not exists idx_deals_buyer          on public.deals (buyer_id);
 create index if not exists idx_deals_supplier       on public.deals (supplier_id);
+create index if not exists idx_vehicles_carrier     on public.vehicles (carrier_id);
+create index if not exists idx_shipments_carrier    on public.shipments (carrier_id);
+create index if not exists idx_shipments_deal       on public.shipments (deal_id);
 create index if not exists idx_profiles_status      on public.profiles (status);
 
 
@@ -355,6 +389,8 @@ alter table public.drivers_metadata enable row level security;
 alter table public.rfqs             enable row level security;
 alter table public.quotations       enable row level security;
 alter table public.deals            enable row level security;
+alter table public.vehicles         enable row level security;
+alter table public.shipments        enable row level security;
 
 -- 7.1 profiles -------------------------------------------------------------
 -- Read: APPROVED rows are public; owners and Super Admins see everything.
@@ -552,6 +588,54 @@ create policy deals_admin_insert on public.deals
   for insert
   with check (public.is_super_admin());
 
+-- 7.8 vehicles -------------------------------------------------------------
+-- Carriers manage only their own fleet; approved carriers' vehicles are
+-- publicly readable for assignment discovery; admins see all.
+drop policy if exists vehicles_select on public.vehicles;
+create policy vehicles_select on public.vehicles
+  for select
+  using (
+    public.is_super_admin()
+    or carrier_id = auth.uid()
+    or exists (
+      select 1 from public.profiles p
+      where p.id = vehicles.carrier_id and p.status = 'APPROVED'
+    )
+  );
+
+drop policy if exists vehicles_write on public.vehicles;
+create policy vehicles_write on public.vehicles
+  for all
+  using (carrier_id = auth.uid() or public.is_super_admin())
+  with check (carrier_id = auth.uid() or public.is_super_admin());
+
+-- 7.9 shipments ------------------------------------------------------------
+-- Assigned carriers may read and update their shipments; the linked buyer and
+-- supplier may read (for tracking); admins have full control.
+drop policy if exists shipments_select on public.shipments;
+create policy shipments_select on public.shipments
+  for select
+  using (
+    public.is_super_admin()
+    or carrier_id = auth.uid()
+    or exists (
+      select 1 from public.deals d
+      where d.id = shipments.deal_id
+        and (d.buyer_id = auth.uid() or d.supplier_id = auth.uid())
+    )
+  );
+
+drop policy if exists shipments_update on public.shipments;
+create policy shipments_update on public.shipments
+  for update
+  using (carrier_id = auth.uid() or public.is_super_admin())
+  with check (carrier_id = auth.uid() or public.is_super_admin());
+
+drop policy if exists shipments_admin_insert on public.shipments;
+create policy shipments_admin_insert on public.shipments
+  for insert
+  with check (public.is_super_admin() or carrier_id = auth.uid());
+
 
 -- ---------------------------------------------------------------------------
 -- 8. Realtime publication (Loop C — Req referenced by realtime sync)
@@ -602,6 +686,20 @@ begin
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'supplier_products'
     ) then
       alter publication supabase_realtime add table public.supplier_products;
+    end if;
+    -- vehicles
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'vehicles'
+    ) then
+      alter publication supabase_realtime add table public.vehicles;
+    end if;
+    -- shipments
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'shipments'
+    ) then
+      alter publication supabase_realtime add table public.shipments;
     end if;
   end if;
 end$$;

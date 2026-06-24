@@ -21,6 +21,9 @@ import type {
   Warehouse,
   WarehouseWithHost,
   SupplierProduct,
+  Vehicle,
+  VehicleStatus,
+  Shipment,
 } from "./database.types";
 
 export type DB = SupabaseClient<Database>;
@@ -409,4 +412,138 @@ export async function fetchOpenRfqsForBidding(db: DB): Promise<Result<Rfq[]>> {
     .eq("status", "OPEN")
     .order("created_at", { ascending: false });
   return error ? fail(error.message) : ok(data ?? []);
+}
+
+// ===========================================================================
+//  Logistics / Driver — fleet (vehicles) + shipments
+// ===========================================================================
+
+/** A carrier's own fleet, newest first. */
+export async function fetchCarrierVehicles(
+  db: DB,
+  carrierId: string
+): Promise<Result<Vehicle[]>> {
+  const { data, error } = await db
+    .from("vehicles")
+    .select("*")
+    .eq("carrier_id", carrierId)
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+/** Register a vehicle in the carrier's fleet. */
+export async function insertVehicle(
+  db: DB,
+  payload: {
+    carrier_id: string;
+    plate_number: string | null;
+    vehicle_type: string | null;
+    max_weight_capacity: number | null;
+    current_status?: VehicleStatus;
+  }
+): Promise<Result<Vehicle>> {
+  const { data, error } = await db.from("vehicles").insert(payload).select().single();
+  return error ? fail(error.message) : ok(data);
+}
+
+/** Update a vehicle's operational status (RLS enforces ownership). */
+export async function setVehicleStatus(
+  db: DB,
+  vehicleId: string,
+  status: VehicleStatus
+): Promise<Result<Vehicle>> {
+  const { data, error } = await db
+    .from("vehicles")
+    .update({ current_status: status })
+    .eq("id", vehicleId)
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
+}
+
+/** Delete a vehicle (RLS enforces carrier ownership). */
+export async function deleteVehicle(db: DB, vehicleId: string): Promise<Result<null>> {
+  const { error } = await db.from("vehicles").delete().eq("id", vehicleId);
+  return error ? fail(error.message) : ok(null);
+}
+
+/** Shipments assigned to a carrier, most recently updated first. */
+export async function fetchCarrierShipments(
+  db: DB,
+  carrierId: string
+): Promise<Result<Shipment[]>> {
+  const { data, error } = await db
+    .from("shipments")
+    .select("*")
+    .eq("carrier_id", carrierId)
+    .order("updated_at", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+/** Advance / set a shipment's supply-chain stage (1..8). */
+export async function setShipmentStage(
+  db: DB,
+  shipmentId: string,
+  stage: number,
+  statusNotes?: string | null
+): Promise<Result<Shipment>> {
+  const patch: { current_stage: number; updated_at: string; status_notes?: string | null } = {
+    current_stage: stage,
+    updated_at: new Date().toISOString(),
+  };
+  if (statusNotes !== undefined) patch.status_notes = statusNotes;
+  const { data, error } = await db
+    .from("shipments")
+    .update(patch)
+    .eq("id", shipmentId)
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
+}
+
+/** Count of a carrier's registered vehicles. */
+export async function countCarrierVehicles(
+  db: DB,
+  carrierId: string
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("vehicles")
+    .select("*", { count: "exact", head: true })
+    .eq("carrier_id", carrierId);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of active trips (shipments not yet at the final stage 8). */
+export async function countCarrierActiveTrips(
+  db: DB,
+  carrierId: string
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("shipments")
+    .select("*", { count: "exact", head: true })
+    .eq("carrier_id", carrierId)
+    .lt("current_stage", 8);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of completed shipments (stage 8). */
+export async function countCarrierCompletedShipments(
+  db: DB,
+  carrierId: string
+): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("shipments")
+    .select("*", { count: "exact", head: true })
+    .eq("carrier_id", carrierId)
+    .eq("current_stage", 8);
+  return error ? fail(error.message) : ok(count ?? 0);
+}
+
+/** Count of pending cargo offers (unassigned shipments awaiting a carrier). */
+export async function countPendingCargoOffers(db: DB): Promise<Result<number>> {
+  const { count, error } = await db
+    .from("shipments")
+    .select("*", { count: "exact", head: true })
+    .is("carrier_id", null);
+  return error ? fail(error.message) : ok(count ?? 0);
 }
