@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Image as ImageIcon, Megaphone, Newspaper, Save, Type } from "lucide-react";
 import { Button, Panel, PanelHeader } from "../ui/primitives";
+import { LiveCMSSection } from "./LiveCMSSection";
 
 type Tab = "hero" | "banners" | "blog" | "announcements";
 
@@ -27,7 +28,11 @@ export function CmsSection() {
   };
 
   return (
-    <Panel>
+    <div className="space-y-6">
+      {/* LIVE — cms_content editor bound to Supabase */}
+      <LiveCMSSection />
+
+      <Panel>
       <PanelHeader title="Public Home Page Content" description="Update live site assets and copy" />
       <div className="flex flex-wrap gap-1.5 border-b border-navy-100 px-5 py-3">
         {tabs.map(({ id, label, icon: Icon }) => (
@@ -107,5 +112,6 @@ export function CmsSection() {
         </div>
       </div>
     </Panel>
+    </div>
   );
 }

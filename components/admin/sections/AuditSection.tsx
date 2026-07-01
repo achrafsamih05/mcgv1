@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { ArrowRight, Lock, Search } from "lucide-react";
 import { activityLogs } from "@/lib/admin/data";
 import { Panel, PanelHeader } from "../ui/primitives";
+import { LiveAuditTrailSection } from "./LiveAuditTrailSection";
 
 export function AuditSection() {
   const [query, setQuery] = useState("");
@@ -21,7 +22,9 @@ export function AuditSection() {
   );
 
   return (
-    <Panel>
+    <div className="space-y-6">
+      <LiveAuditTrailSection />
+      <Panel>
       <PanelHeader
         title="Immutable Audit Trail"
         description="Append-only — every privileged action is permanently recorded"
@@ -78,5 +81,6 @@ export function AuditSection() {
         </table>
       </div>
     </Panel>
+    </div>
   );
 }

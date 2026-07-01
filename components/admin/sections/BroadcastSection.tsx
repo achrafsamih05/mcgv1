@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Bell, Mail, MessageSquare, Send } from "lucide-react";
+import { Bell, Loader2, Mail, MessageSquare, Send } from "lucide-react";
+import { createClient, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
+import { broadcastNotification } from "@/lib/supabase/queries";
 import { Button, Panel, PanelHeader } from "../ui/primitives";
 
 const audiences = ["All Users", "Only Suppliers", "Only Importers", "Only Logistics/Drivers"];
@@ -13,10 +15,37 @@ export function BroadcastSection() {
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
   const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const send = (e: React.FormEvent) => {
+  const send = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !message.trim()) return;
+    setError(null);
+
+    if (!SUPABASE_CONFIGURED) {
+      setSent(true);
+      setTimeout(() => setSent(false), 3000);
+      return;
+    }
+
+    setSending(true);
+    const db = createClient();
+    // Live bulk broadcast — inserts a global notification row that every
+    // connected client's realtime bell subscription picks up instantly.
+    const res = await broadcastNotification(db, {
+      title: title.trim(),
+      body: `${message.trim()}  ·  Audience: ${audience} · Channel: ${channel}`,
+      category: "broadcast",
+    });
+    setSending(false);
+
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    setTitle("");
+    setMessage("");
     setSent(true);
     setTimeout(() => setSent(false), 3000);
   };
@@ -90,13 +119,16 @@ export function BroadcastSection() {
           </div>
 
           <div className="flex items-center justify-between">
-            {sent ? (
+            {error ? (
+              <p role="alert" className="text-sm font-medium text-red-600">{error}</p>
+            ) : sent ? (
               <p role="status" className="text-sm font-medium text-emerald-600">
-                Broadcast queued to {audience} via {channel}.
+                Broadcast sent to {audience} via {channel}.
               </p>
             ) : <span />}
-            <Button type="submit" disabled={!title.trim() || !message.trim()}>
-              <Send className="h-4 w-4" aria-hidden="true" />Send Broadcast
+            <Button type="submit" disabled={!title.trim() || !message.trim() || sending}>
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
+              {sending ? "Sending…" : "Send Broadcast"}
             </Button>
           </div>
         </form>

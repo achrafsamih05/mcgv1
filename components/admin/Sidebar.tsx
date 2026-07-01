@@ -6,6 +6,7 @@ import {
   FileText,
   Handshake,
   LayoutDashboard,
+  LogOut,
   Megaphone,
   MessageSquareWarning,
   Package,
@@ -22,6 +23,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
+import { createClient, SUPABASE_CONFIGURED } from "@/lib/supabase/client";
 import type { AdminSectionId } from "@/lib/admin/types";
 import { navItems, type NavItem } from "./nav";
 
@@ -64,6 +67,18 @@ export function Sidebar({
   mobileOpen: boolean;
   onCloseMobile: () => void;
 }) {
+  const [signingOut, setSigningOut] = useState(false);
+
+  const signOut = async () => {
+    setSigningOut(true);
+    if (SUPABASE_CONFIGURED) {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+    }
+    // Hard redirect clears any client-held state.
+    window.location.assign("/auth");
+  };
+
   return (
     <>
       {/* Mobile backdrop */}
@@ -156,6 +171,15 @@ export function Sidebar({
               </p>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={signOut}
+            disabled={signingOut}
+            className="mt-3 flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-navy-100 transition-colors duration-200 hover:bg-accent-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <LogOut className="h-4 w-4" aria-hidden="true" />
+            {signingOut ? "Signing out…" : "Sign Out"}
+          </button>
         </div>
       </aside>
     </>

@@ -6,6 +6,7 @@ import type { Dispute } from "@/lib/admin/types";
 import { disputes as seed } from "@/lib/admin/data";
 import { Badge, Button, Panel } from "../ui/primitives";
 import { Modal } from "../ui/Modal";
+import { LiveDisputeCenterSection } from "./LiveDisputeCenterSection";
 
 const statusTone: Record<Dispute["status"], Parameters<typeof Badge>[0]["tone"]> = {
   Open: "danger",
@@ -36,7 +37,10 @@ export function DisputesSection() {
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+      {/* LIVE — Supabase-backed dispute center with verdict + audit logging */}
+      <LiveDisputeCenterSection />
+
+      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
         {list.map((d) => (
           <Panel key={d.id} className="p-5">
             <div className="flex items-center justify-between">

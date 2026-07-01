@@ -24,6 +24,18 @@ import type {
   Vehicle,
   VehicleStatus,
   Shipment,
+  Notification,
+  Dispute,
+  DisputeStatus,
+  DisputeWithParties,
+  Review,
+  ReviewWithParties,
+  SystemLog,
+  SystemLogInsert,
+  Wallet,
+  CmsContent,
+  ModerationFlagWithParties,
+  PlatformSetting,
 } from "./database.types";
 
 export type DB = SupabaseClient<Database>;
@@ -612,4 +624,313 @@ export async function fetchAllRfqs(db: DB): Promise<Result<Rfq[]>> {
     .select("*")
     .order("created_at", { ascending: false });
   return error ? fail(error.message) : ok(data ?? []);
+}
+
+// ===========================================================================
+//  Notifications — bell center + broadcast engine
+// ===========================================================================
+
+/** Notifications visible to the current user (own + global), newest first. */
+export async function fetchNotifications(db: DB): Promise<Result<Notification[]>> {
+  const { data, error } = await db
+    .from("notifications")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(30);
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+/** Mark a single notification as read. */
+export async function markNotificationRead(
+  db: DB,
+  id: string
+): Promise<Result<null>> {
+  const { error } = await db.from("notifications").update({ is_read: true }).eq("id", id);
+  return error ? fail(error.message) : ok(null);
+}
+
+/** Broadcast a global notification to every user (admin broadcast engine). */
+export async function broadcastNotification(
+  db: DB,
+  payload: { title: string; body: string | null; category?: string }
+): Promise<Result<Notification>> {
+  const { data, error } = await db
+    .from("notifications")
+    .insert({
+      recipient_id: null,
+      is_global: true,
+      category: payload.category ?? "broadcast",
+      title: payload.title,
+      body: payload.body,
+    })
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
+}
+
+// ===========================================================================
+//  Admin — User Directory (paginated, searchable, role-filtered)
+// ===========================================================================
+
+export interface DirectoryPage {
+  rows: Profile[];
+  total: number;
+}
+
+export async function fetchProfilesPage(
+  db: DB,
+  opts: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    role?: Database["public"]["Enums"]["platform_role"] | "ALL";
+  }
+): Promise<Result<DirectoryPage>> {
+  const from = opts.page * opts.pageSize;
+  const to = from + opts.pageSize - 1;
+
+  let query = db
+    .from("profiles")
+    .select("*", { count: "exact" })
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (opts.role && opts.role !== "ALL") query = query.eq("role", opts.role);
+  if (opts.search && opts.search.trim()) {
+    const term = `%${opts.search.trim()}%`;
+    query = query.or(`full_name.ilike.${term},company_name.ilike.${term}`);
+  }
+
+  const { data, error, count } = await query;
+  return error ? fail(error.message) : ok({ rows: data ?? [], total: count ?? 0 });
+}
+
+/** All catalog products across suppliers (admin moderation view). */
+export async function fetchAllSupplierProducts(
+  db: DB
+): Promise<Result<SupplierProduct[]>> {
+  const { data, error } = await db
+    .from("supplier_products")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(50);
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+// ===========================================================================
+//  Trust & Safety — disputes, reviews, and the audit trail (system_logs)
+// ===========================================================================
+
+/** Append an entry to the immutable audit trail. */
+export async function insertSystemLog(
+  db: DB,
+  payload: SystemLogInsert
+): Promise<Result<SystemLog>> {
+  const { data, error } = await db.from("system_logs").insert(payload).select().single();
+  return error ? fail(error.message) : ok(data);
+}
+
+/** All disputes joined to creator + target profile names, newest first. */
+export async function fetchDisputes(db: DB): Promise<Result<DisputeWithParties[]>> {
+  const { data, error } = await db
+    .from("disputes")
+    .select(
+      "*, creator:profiles!disputes_creator_id_fkey(id, full_name, company_name), target:profiles!disputes_target_id_fkey(id, full_name, company_name)"
+    )
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok((data as unknown as DisputeWithParties[]) ?? []);
+}
+
+/**
+ * Settle a dispute: write the verdict + status, then append a system log.
+ * The log write is best-effort and never rolls back the settlement.
+ */
+export async function settleDispute(
+  db: DB,
+  dispute: Pick<Dispute, "id" | "subject">,
+  verdict: string,
+  status: Extract<DisputeStatus, "RESOLVED" | "DISMISSED">,
+  actor: { id: string | null; name: string | null }
+): Promise<Result<Dispute>> {
+  const { data, error } = await db
+    .from("disputes")
+    .update({ admin_verdict: verdict, status, updated_at: new Date().toISOString() })
+    .eq("id", dispute.id)
+    .select()
+    .single();
+  if (error) return fail(error.message);
+
+  await insertSystemLog(db, {
+    actor_id: actor.id,
+    actor_name: actor.name,
+    action: status === "RESOLVED" ? "Resolved dispute" : "Dismissed dispute",
+    details: { dispute_id: dispute.id, subject: dispute.subject, verdict, status },
+  });
+
+  return ok(data);
+}
+
+/** All reviews joined to author + target profile names, newest first. */
+export async function fetchReviews(db: DB): Promise<Result<ReviewWithParties[]>> {
+  const { data, error } = await db
+    .from("reviews")
+    .select(
+      "*, author:profiles!reviews_author_id_fkey(id, full_name, company_name), target:profiles!reviews_target_id_fkey(id, full_name, company_name)"
+    )
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok((data as unknown as ReviewWithParties[]) ?? []);
+}
+
+/** Toggle a review's flagged state (admin moderation). */
+export async function setReviewFlag(
+  db: DB,
+  reviewId: string,
+  flagged: boolean
+): Promise<Result<Review>> {
+  const { data, error } = await db
+    .from("reviews")
+    .update({ is_flagged: flagged })
+    .eq("id", reviewId)
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
+}
+
+/** Permanently delete a review (admin override). */
+export async function deleteReview(db: DB, reviewId: string): Promise<Result<null>> {
+  const { error } = await db.from("reviews").delete().eq("id", reviewId);
+  return error ? fail(error.message) : ok(null);
+}
+
+/** Audit trail feed, newest first. */
+export async function fetchSystemLogs(db: DB): Promise<Result<SystemLog[]>> {
+  const { data, error } = await db
+    .from("system_logs")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+// ===========================================================================
+//  Financial — wallets ledger
+// ===========================================================================
+
+/** All wallet rows (admin financial overview). */
+export async function fetchWallets(db: DB): Promise<Result<Wallet[]>> {
+  const { data, error } = await db
+    .from("wallets")
+    .select("*")
+    .order("current_balance", { ascending: false });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+export interface FinancialSummary {
+  totalBalance: number;
+  totalEscrow: number;
+  walletCount: number;
+}
+
+/** Aggregate escrow + balance totals across the ledger. */
+export async function fetchFinancialSummary(db: DB): Promise<Result<FinancialSummary>> {
+  const { data, error } = await db.from("wallets").select("current_balance, pending_escrow");
+  if (error) return fail(error.message);
+  const rows = data ?? [];
+  const summary: FinancialSummary = {
+    totalBalance: rows.reduce((s, r) => s + Number(r.current_balance ?? 0), 0),
+    totalEscrow: rows.reduce((s, r) => s + Number(r.pending_escrow ?? 0), 0),
+    walletCount: rows.length,
+  };
+  return ok(summary);
+}
+
+// ===========================================================================
+//  Dispute settlement via ACID RPC
+// ===========================================================================
+
+export async function processDisputeSettlement(
+  db: DB,
+  targetDisputeId: string,
+  verdictStatus: "RESOLVED" | "DISMISSED",
+  explanation: string
+): Promise<Result<null>> {
+  const { error } = await db.rpc("process_dispute_settlement", {
+    target_dispute_id: targetDisputeId,
+    verdict_status: verdictStatus,
+    explanation,
+  });
+  return error ? fail(error.message) : ok(null);
+}
+
+// ===========================================================================
+//  CMS content
+// ===========================================================================
+
+export async function fetchCmsContent(db: DB): Promise<Result<CmsContent[]>> {
+  const { data, error } = await db.from("cms_content").select("*").order("id", { ascending: true });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+export async function upsertCmsContent(
+  db: DB,
+  id: string,
+  content: string,
+  updatedBy: string | null
+): Promise<Result<CmsContent>> {
+  const { data, error } = await db
+    .from("cms_content")
+    .upsert({ id, content, updated_by: updatedBy, updated_at: new Date().toISOString() }, { onConflict: "id" })
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
+}
+
+// ===========================================================================
+//  Message moderation
+// ===========================================================================
+
+export async function fetchModerationFlags(
+  db: DB
+): Promise<Result<ModerationFlagWithParties[]>> {
+  const { data, error } = await db
+    .from("moderation_flags")
+    .select(
+      "*, sender:profiles!moderation_flags_sender_id_fkey(id, full_name, company_name, status), reporter:profiles!moderation_flags_reporter_id_fkey(id, full_name, company_name)"
+    )
+    .order("created_at", { ascending: false });
+  return error ? fail(error.message) : ok((data as unknown as ModerationFlagWithParties[]) ?? []);
+}
+
+/** Mark a moderation flag resolved (dismiss). */
+export async function resolveModerationFlag(db: DB, id: string): Promise<Result<null>> {
+  const { error } = await db.from("moderation_flags").update({ is_resolved: true }).eq("id", id);
+  return error ? fail(error.message) : ok(null);
+}
+
+/** Suspend an offending user by setting their profile status to REJECTED. */
+export async function suspendUser(db: DB, profileId: string): Promise<Result<null>> {
+  const { error } = await db.from("profiles").update({ status: "REJECTED" }).eq("id", profileId);
+  return error ? fail(error.message) : ok(null);
+}
+
+// ===========================================================================
+//  Platform settings (commission structure)
+// ===========================================================================
+
+export async function fetchPlatformSettings(db: DB): Promise<Result<PlatformSetting[]>> {
+  const { data, error } = await db.from("platform_settings").select("*").order("key", { ascending: true });
+  return error ? fail(error.message) : ok(data ?? []);
+}
+
+export async function updatePlatformSetting(
+  db: DB,
+  key: string,
+  value: number
+): Promise<Result<PlatformSetting>> {
+  const { data, error } = await db
+    .from("platform_settings")
+    .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" })
+    .select()
+    .single();
+  return error ? fail(error.message) : ok(data);
 }

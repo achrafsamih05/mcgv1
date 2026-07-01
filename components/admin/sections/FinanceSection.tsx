@@ -3,6 +3,7 @@
 import { Banknote, Building2, PiggyBank, Truck, Wallet } from "lucide-react";
 import { Panel, PanelHeader } from "../ui/primitives";
 import { BarChart, ChartLegend } from "../ui/charts";
+import { LiveFinancialSection } from "./LiveFinancialSection";
 
 const tiles = [
   { id: "commissions", label: "Platform Commissions", value: "$1.84M", icon: Wallet, tone: "text-accent-600", delta: "+12% MoM" },
@@ -15,6 +16,9 @@ const tiles = [
 export function FinanceSection() {
   return (
     <div className="space-y-5">
+      {/* LIVE — wallets ledger aggregates + revenue charts */}
+      <LiveFinancialSection />
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {tiles.map((t) => {
           const Icon = t.icon;

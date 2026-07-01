@@ -5,6 +5,7 @@ import { Ban, Trash2, TriangleAlert } from "lucide-react";
 import type { FlaggedMessage } from "@/lib/admin/types";
 import { flaggedMessages as seed } from "@/lib/admin/data";
 import { Badge, Button, Panel, PanelHeader } from "../ui/primitives";
+import { LiveModerationSection } from "./LiveModerationSection";
 
 export function ModerationSection() {
   const [list, setList] = useState<FlaggedMessage[]>(seed);
@@ -12,7 +13,11 @@ export function ModerationSection() {
   const remove = (id: string) => setList((prev) => prev.filter((m) => m.id !== id));
 
   return (
-    <Panel>
+    <div className="space-y-6">
+      {/* LIVE — moderation_flags queue bound to Supabase */}
+      <LiveModerationSection />
+
+      <Panel>
       <PanelHeader
         title="Flagged Message Queue"
         description={`${list.length} reported messages, newest first`}
@@ -49,5 +54,6 @@ export function ModerationSection() {
         </ul>
       )}
     </Panel>
+    </div>
   );
 }

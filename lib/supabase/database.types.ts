@@ -38,6 +38,17 @@ export type QuotationStatus = "PENDING" | "ACCEPTED" | "REJECTED";
 
 export type VehicleStatus = "AVAILABLE" | "ON_TRIP" | "MAINTENANCE";
 
+export type DisputeStatus = "OPEN" | "UNDER_REVIEW" | "RESOLVED" | "DISMISSED";
+
+/** JSON value type for jsonb columns — strict, no `any`. */
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json }
+  | Json[];
+
 /** Ordered 8-stage supply-chain timeline for shipment tracking. */
 export const SHIPMENT_STAGES = [
   "Task Created",
@@ -174,6 +185,82 @@ export type Shipment = {
   updated_at: string;
 };
 
+export type Notification = {
+  id: string;
+  recipient_id: string | null;
+  is_global: boolean;
+  category: string;
+  title: string;
+  body: string | null;
+  is_read: boolean;
+  created_at: string;
+};
+
+export type Dispute = {
+  id: string;
+  creator_id: string | null;
+  target_id: string | null;
+  deal_id: string | null;
+  subject: string;
+  description: string | null;
+  amount: number | null;
+  status: DisputeStatus;
+  admin_verdict: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Review = {
+  id: string;
+  author_id: string | null;
+  target_id: string | null;
+  rating: number;
+  comment: string | null;
+  is_flagged: boolean;
+  created_at: string;
+};
+
+export type SystemLog = {
+  id: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  action: string;
+  details: Json | null;
+  created_at: string;
+};
+
+export type Wallet = {
+  id: string;
+  profile_id: string | null;
+  current_balance: number;
+  pending_escrow: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CmsContent = {
+  id: string;
+  content: string;
+  updated_by: string | null;
+  updated_at: string;
+};
+
+export type ModerationFlag = {
+  id: string;
+  chat_message_id: string;
+  sender_id: string | null;
+  reporter_id: string | null;
+  flag_reason: string;
+  is_resolved: boolean;
+  created_at: string;
+};
+
+export type PlatformSetting = {
+  key: string;
+  value: number;
+  updated_at: string;
+};
+
 export type Deal = {
   id: string;
   buyer_id: string;
@@ -215,6 +302,19 @@ export type VehicleInsert = Omit<Vehicle, "id" | "created_at" | "current_status"
 export type ShipmentInsert = Omit<Shipment, "id" | "updated_at" | "current_stage"> & {
   current_stage?: number;
 };
+export type NotificationInsert = Omit<Notification, "id" | "created_at" | "is_read"> & {
+  is_read?: boolean;
+};
+export type DisputeInsert = Omit<Dispute, "id" | "created_at" | "updated_at" | "status" | "admin_verdict"> & {
+  status?: DisputeStatus;
+  admin_verdict?: string | null;
+};
+export type ReviewInsert = Omit<Review, "id" | "created_at" | "is_flagged"> & {
+  is_flagged?: boolean;
+};
+export type SystemLogInsert = Omit<SystemLog, "id" | "created_at">;
+export type CmsContentInsert = Omit<CmsContent, "updated_at"> & { updated_at?: string };
+export type PlatformSettingInsert = Omit<PlatformSetting, "updated_at"> & { updated_at?: string };
 
 // --- Joined read shapes ----------------------------------------------------
 export type ProfileBrief = Pick<
@@ -226,6 +326,24 @@ export type ProductWithSupplier = Product & { profiles: ProfileBrief | null };
 export type WarehouseWithHost = Warehouse & { profiles: ProfileBrief | null };
 export type QuotationWithSupplier = Quotation & {
   profiles: Pick<Profile, "id" | "full_name" | "company_name"> | null;
+};
+
+/** Dispute joined to creator + target profile names for the admin center. */
+export type DisputeWithParties = Dispute & {
+  creator: Pick<Profile, "id" | "full_name" | "company_name"> | null;
+  target: Pick<Profile, "id" | "full_name" | "company_name"> | null;
+};
+
+/** Review joined to its author + target profile names. */
+export type ReviewWithParties = Review & {
+  author: Pick<Profile, "id" | "full_name" | "company_name"> | null;
+  target: Pick<Profile, "id" | "full_name" | "company_name"> | null;
+};
+
+/** Moderation flag joined to sender + reporter profile names. */
+export type ModerationFlagWithParties = ModerationFlag & {
+  sender: Pick<Profile, "id" | "full_name" | "company_name" | "status"> | null;
+  reporter: Pick<Profile, "id" | "full_name" | "company_name"> | null;
 };
 
 /**
@@ -296,11 +414,63 @@ export type Database = {
         Update: Partial<Shipment>;
         Relationships: [];
       };
+      notifications: {
+        Row: Notification;
+        Insert: NotificationInsert;
+        Update: Partial<Notification>;
+        Relationships: [];
+      };
+      disputes: {
+        Row: Dispute;
+        Insert: DisputeInsert;
+        Update: Partial<Dispute>;
+        Relationships: [];
+      };
+      reviews: {
+        Row: Review;
+        Insert: ReviewInsert;
+        Update: Partial<Review>;
+        Relationships: [];
+      };
+      system_logs: {
+        Row: SystemLog;
+        Insert: SystemLogInsert;
+        Update: Partial<SystemLog>;
+        Relationships: [];
+      };
+      wallets: {
+        Row: Wallet;
+        Insert: Partial<Wallet>;
+        Update: Partial<Wallet>;
+        Relationships: [];
+      };
+      cms_content: {
+        Row: CmsContent;
+        Insert: CmsContentInsert;
+        Update: Partial<CmsContent>;
+        Relationships: [];
+      };
+      moderation_flags: {
+        Row: ModerationFlag;
+        Insert: Partial<ModerationFlag>;
+        Update: Partial<ModerationFlag>;
+        Relationships: [];
+      };
+      platform_settings: {
+        Row: PlatformSetting;
+        Insert: PlatformSettingInsert;
+        Update: Partial<PlatformSetting>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
       accept_deal: { Args: { p_quote_id: string }; Returns: Deal };
       is_super_admin: { Args: Record<string, never>; Returns: boolean };
+      process_dispute_settlement: {
+        Args: { target_dispute_id: string; verdict_status: string; explanation: string };
+        Returns: undefined;
+      };
     };
     Enums: {
       platform_role: PlatformRole;
@@ -310,6 +480,7 @@ export type Database = {
       rfq_status: RfqStatus;
       quotation_status: QuotationStatus;
       vehicle_status: VehicleStatus;
+      dispute_status: DisputeStatus;
     };
   };
 };

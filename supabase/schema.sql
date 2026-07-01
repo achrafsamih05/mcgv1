@@ -39,17 +39,6 @@ begin
     );
   end if;
 
-  -- Recognize a generic 'ADMIN' role alongside 'SUPER_ADMIN' (idempotent).
-  -- Added non-destructively so existing data and ordering are preserved.
-  if exists (select 1 from pg_type where typname = 'platform_role')
-     and not exists (
-       select 1 from pg_enum e
-       join pg_type t on t.oid = e.enumtypid
-       where t.typname = 'platform_role' and e.enumlabel = 'ADMIN'
-     ) then
-    alter type public.platform_role add value 'ADMIN';
-  end if;
-
   if not exists (select 1 from pg_type where typname = 'verification_status') then
     create type public.verification_status as enum (
       'PENDING', 'APPROVED', 'REJECTED'
@@ -83,6 +72,12 @@ begin
   if not exists (select 1 from pg_type where typname = 'vehicle_status') then
     create type public.vehicle_status as enum (
       'AVAILABLE', 'ON_TRIP', 'MAINTENANCE'
+    );
+  end if;
+
+  if not exists (select 1 from pg_type where typname = 'dispute_status') then
+    create type public.dispute_status as enum (
+      'OPEN', 'UNDER_REVIEW', 'RESOLVED', 'DISMISSED'
     );
   end if;
 end$$;
@@ -236,6 +231,98 @@ create table if not exists public.shipments (
   updated_at    timestamptz not null default now()
 );
 
+-- 3.10 notifications — admin/global alerts + broadcast engine feed
+create table if not exists public.notifications (
+  id            uuid primary key default gen_random_uuid(),
+  recipient_id  uuid references public.profiles (id) on delete cascade,
+  is_global     boolean not null default false,
+  category      text not null default 'system',
+  title         text not null,
+  body          text,
+  is_read       boolean not null default false,
+  created_at    timestamptz not null default now()
+);
+
+-- 3.11 disputes — tri-party dispute resolution (Trust & Safety)
+create table if not exists public.disputes (
+  id             uuid primary key default gen_random_uuid(),
+  creator_id     uuid references public.profiles (id) on delete set null,
+  target_id      uuid references public.profiles (id) on delete set null,
+  deal_id        uuid references public.deals (id)    on delete set null,
+  subject        text not null,
+  description    text,
+  amount         numeric,
+  status         public.dispute_status not null default 'OPEN',
+  admin_verdict  text,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
+);
+
+-- 3.12 reviews — 1–5 star feedback on suppliers / drivers / warehouses
+create table if not exists public.reviews (
+  id           uuid primary key default gen_random_uuid(),
+  author_id    uuid references public.profiles (id) on delete set null,
+  target_id    uuid references public.profiles (id) on delete set null,
+  rating       integer not null
+                 constraint reviews_rating_range check (rating between 1 and 5),
+  comment      text,
+  is_flagged   boolean not null default false,
+  created_at   timestamptz not null default now()
+);
+
+-- 3.13 system_logs — immutable admin audit trail
+create table if not exists public.system_logs (
+  id          uuid primary key default gen_random_uuid(),
+  actor_id    uuid references public.profiles (id) on delete set null,
+  actor_name  text,
+  action      text not null,
+  details     jsonb,
+  created_at  timestamptz not null default now()
+);
+
+-- 3.14 wallets — per-profile balance + escrow ledger
+create table if not exists public.wallets (
+  id              uuid primary key default gen_random_uuid(),
+  profile_id      uuid unique references public.profiles (id) on delete cascade,
+  current_balance numeric(15, 2) not null default 0.00 check (current_balance >= 0),
+  pending_escrow  numeric(15, 2) not null default 0.00 check (pending_escrow >= 0),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+-- 3.15 cms_content — editable public landing copy (keyed by slug)
+create table if not exists public.cms_content (
+  id          text primary key,
+  content     text not null,
+  updated_by  uuid references public.profiles (id) on delete set null,
+  updated_at  timestamptz not null default now()
+);
+
+-- 3.16 moderation_flags — flagged chat messages queue
+create table if not exists public.moderation_flags (
+  id              uuid primary key default gen_random_uuid(),
+  chat_message_id uuid not null,
+  sender_id       uuid references public.profiles (id) on delete cascade,
+  reporter_id     uuid references public.profiles (id) on delete cascade,
+  flag_reason     text not null,
+  is_resolved     boolean not null default false,
+  created_at      timestamptz not null default now()
+);
+
+-- 3.17 platform_settings — global numeric controls (commission %, etc.)
+create table if not exists public.platform_settings (
+  key         text primary key,
+  value       numeric(5, 2) not null,
+  updated_at  timestamptz not null default now()
+);
+
+-- Seed the default commission structure (idempotent).
+insert into public.platform_settings (key, value) values
+  ('supplier_commission', 5.00),
+  ('transit_commission', 3.00),
+  ('warehouse_commission', 2.00)
+on conflict (key) do nothing;
+
 -- Helpful indexes for the live feeds and pipeline joins.
 create index if not exists idx_products_supplier   on public.products (supplier_id);
 create index if not exists idx_supplier_products    on public.supplier_products (supplier_id);
@@ -248,6 +335,12 @@ create index if not exists idx_deals_supplier       on public.deals (supplier_id
 create index if not exists idx_vehicles_carrier     on public.vehicles (carrier_id);
 create index if not exists idx_shipments_carrier    on public.shipments (carrier_id);
 create index if not exists idx_shipments_deal       on public.shipments (deal_id);
+create index if not exists idx_notifications_recipient on public.notifications (recipient_id);
+create index if not exists idx_notifications_global  on public.notifications (is_global);
+create index if not exists idx_disputes_status      on public.disputes (status);
+create index if not exists idx_disputes_creator     on public.disputes (creator_id);
+create index if not exists idx_reviews_target       on public.reviews (target_id);
+create index if not exists idx_system_logs_created  on public.system_logs (created_at);
 create index if not exists idx_profiles_status      on public.profiles (status);
 
 
@@ -316,7 +409,7 @@ set search_path = public
 as $$
   select exists (
     select 1 from public.profiles
-    where id = auth.uid() and role in ('SUPER_ADMIN', 'ADMIN')
+    where id = auth.uid() and role::text in ('SUPER_ADMIN', 'ADMIN')
   );
 $$;
 
@@ -387,6 +480,97 @@ $$;
 
 grant execute on function public.accept_deal(uuid) to authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 6b. Dispute settlement RPC — ACID escrow adjustment on a verdict.
+--     SECURITY DEFINER so it can move wallet balances regardless of the
+--     caller's row privileges, while restricting invocation to admins.
+--     Uses the live supplier_commission rate from platform_settings.
+-- ---------------------------------------------------------------------------
+create or replace function public.process_dispute_settlement(
+  target_dispute_id uuid,
+  verdict_status    text,
+  explanation       text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_deal_id     uuid;
+  v_amount      numeric(15, 2);
+  v_buyer_id    uuid;
+  v_supplier_id uuid;
+  v_commission  numeric(15, 2);
+  v_payout      numeric(15, 2);
+  v_rate        numeric(5, 2);
+  v_status      public.dispute_status;
+begin
+  -- Only admins may settle disputes.
+  if not public.is_super_admin() then
+    raise exception 'Not authorized to settle disputes' using errcode = 'insufficient_privilege';
+  end if;
+
+  select deal_id, creator_id, target_id, amount, status
+    into v_deal_id, v_buyer_id, v_supplier_id, v_amount, v_status
+  from public.disputes
+  where id = target_dispute_id;
+
+  if not found then
+    raise exception 'Dispute % not found', target_dispute_id using errcode = 'no_data_found';
+  end if;
+
+  -- Guard against double-settlement (only OPEN / UNDER_REVIEW can be ruled).
+  if v_status not in ('OPEN', 'UNDER_REVIEW') then
+    raise exception 'Dispute is already settled';
+  end if;
+
+  -- Resolve the live supplier commission rate (default 5%).
+  select value into v_rate from public.platform_settings where key = 'supplier_commission';
+  v_rate := coalesce(v_rate, 5.00);
+
+  if verdict_status = 'RESOLVED' then
+    -- Rule for the supplier: release escrow minus commission to their wallet.
+    v_commission := coalesce(v_amount, 0) * (v_rate / 100.0);
+    v_payout := coalesce(v_amount, 0) - v_commission;
+    if v_supplier_id is not null then
+      update public.wallets
+        set pending_escrow = greatest(pending_escrow - coalesce(v_amount, 0), 0),
+            current_balance = current_balance + v_payout,
+            updated_at = now()
+      where profile_id = v_supplier_id;
+    end if;
+    if v_deal_id is not null then
+      update public.deals set status = 'COMPLETED' where id = v_deal_id;
+    end if;
+
+  elsif verdict_status = 'DISMISSED' then
+    -- Rule for the buyer: refund the full escrow back to their wallet.
+    if v_buyer_id is not null then
+      update public.wallets
+        set pending_escrow = greatest(pending_escrow - coalesce(v_amount, 0), 0),
+            current_balance = current_balance + coalesce(v_amount, 0),
+            updated_at = now()
+      where profile_id = v_buyer_id;
+    end if;
+    if v_deal_id is not null then
+      update public.deals set status = 'CANCELLED' where id = v_deal_id;
+    end if;
+  else
+    raise exception 'Invalid verdict status %', verdict_status using errcode = 'check_violation';
+  end if;
+
+  update public.disputes
+    set status = case when verdict_status = 'RESOLVED' then 'RESOLVED'::public.dispute_status
+                      else 'DISMISSED'::public.dispute_status end,
+        admin_verdict = explanation,
+        updated_at = now()
+  where id = target_dispute_id;
+end;
+$$;
+
+grant execute on function public.process_dispute_settlement(uuid, text, text) to authenticated;
+
 
 -- ---------------------------------------------------------------------------
 -- 7. Row Level Security (Req 5, 6)
@@ -402,6 +586,14 @@ alter table public.quotations       enable row level security;
 alter table public.deals            enable row level security;
 alter table public.vehicles         enable row level security;
 alter table public.shipments        enable row level security;
+alter table public.notifications    enable row level security;
+alter table public.disputes         enable row level security;
+alter table public.reviews          enable row level security;
+alter table public.system_logs      enable row level security;
+alter table public.wallets          enable row level security;
+alter table public.cms_content      enable row level security;
+alter table public.moderation_flags enable row level security;
+alter table public.platform_settings enable row level security;
 
 -- 7.1 profiles -------------------------------------------------------------
 -- Read: APPROVED rows are public; owners and Super Admins see everything.
@@ -647,6 +839,147 @@ create policy shipments_admin_insert on public.shipments
   for insert
   with check (public.is_super_admin() or carrier_id = auth.uid());
 
+-- 7.10 notifications -------------------------------------------------------
+-- A user sees their own notifications and any global broadcast; admins see all.
+drop policy if exists notifications_select on public.notifications;
+create policy notifications_select on public.notifications
+  for select
+  using (
+    public.is_super_admin()
+    or is_global = true
+    or recipient_id = auth.uid()
+  );
+
+-- Recipients may mark their own as read; admins may update any.
+drop policy if exists notifications_update on public.notifications;
+create policy notifications_update on public.notifications
+  for update
+  using (recipient_id = auth.uid() or public.is_super_admin())
+  with check (recipient_id = auth.uid() or public.is_super_admin());
+
+-- Any authenticated user may enqueue a notification; admins drive broadcasts.
+drop policy if exists notifications_insert on public.notifications;
+create policy notifications_insert on public.notifications
+  for insert
+  with check (auth.uid() is not null);
+
+-- 7.11 disputes ------------------------------------------------------------
+-- Parties to a dispute (creator/target) and admins may read; admins resolve.
+drop policy if exists disputes_select on public.disputes;
+create policy disputes_select on public.disputes
+  for select
+  using (
+    public.is_super_admin()
+    or creator_id = auth.uid()
+    or target_id = auth.uid()
+  );
+
+drop policy if exists disputes_insert on public.disputes;
+create policy disputes_insert on public.disputes
+  for insert
+  with check (creator_id = auth.uid() or public.is_super_admin());
+
+-- Only admins issue verdicts / change status.
+drop policy if exists disputes_update on public.disputes;
+create policy disputes_update on public.disputes
+  for update
+  using (public.is_super_admin())
+  with check (public.is_super_admin());
+
+-- 7.12 reviews -------------------------------------------------------------
+-- Reviews are publicly readable; authors create their own; admins moderate.
+drop policy if exists reviews_select on public.reviews;
+create policy reviews_select on public.reviews
+  for select
+  using (true);
+
+drop policy if exists reviews_insert on public.reviews;
+create policy reviews_insert on public.reviews
+  for insert
+  with check (author_id = auth.uid() or public.is_super_admin());
+
+drop policy if exists reviews_update on public.reviews;
+create policy reviews_update on public.reviews
+  for update
+  using (author_id = auth.uid() or public.is_super_admin())
+  with check (author_id = auth.uid() or public.is_super_admin());
+
+drop policy if exists reviews_delete on public.reviews;
+create policy reviews_delete on public.reviews
+  for delete
+  using (public.is_super_admin());
+
+-- 7.13 system_logs ---------------------------------------------------------
+-- Only admins read the audit trail; any authenticated actor may append.
+drop policy if exists system_logs_select on public.system_logs;
+create policy system_logs_select on public.system_logs
+  for select
+  using (public.is_super_admin());
+
+drop policy if exists system_logs_insert on public.system_logs;
+create policy system_logs_insert on public.system_logs
+  for insert
+  with check (auth.uid() is not null);
+
+-- 7.14 wallets -------------------------------------------------------------
+-- Owners read their own wallet; admins have full control (adjustments run
+-- through the SECURITY DEFINER settlement RPC).
+drop policy if exists wallets_select on public.wallets;
+create policy wallets_select on public.wallets
+  for select
+  using (profile_id = auth.uid() or public.is_super_admin());
+
+drop policy if exists wallets_write on public.wallets;
+create policy wallets_write on public.wallets
+  for all
+  using (public.is_super_admin())
+  with check (public.is_super_admin());
+
+-- 7.15 cms_content ---------------------------------------------------------
+-- Public landing copy is world-readable; only admins mutate it.
+drop policy if exists cms_content_select on public.cms_content;
+create policy cms_content_select on public.cms_content
+  for select
+  using (true);
+
+drop policy if exists cms_content_write on public.cms_content;
+create policy cms_content_write on public.cms_content
+  for all
+  using (public.is_super_admin())
+  with check (public.is_super_admin());
+
+-- 7.16 moderation_flags ----------------------------------------------------
+-- Reporters see their own reports; admins see and resolve everything.
+drop policy if exists moderation_flags_select on public.moderation_flags;
+create policy moderation_flags_select on public.moderation_flags
+  for select
+  using (public.is_super_admin() or reporter_id = auth.uid());
+
+drop policy if exists moderation_flags_insert on public.moderation_flags;
+create policy moderation_flags_insert on public.moderation_flags
+  for insert
+  with check (reporter_id = auth.uid() or public.is_super_admin());
+
+drop policy if exists moderation_flags_update on public.moderation_flags;
+create policy moderation_flags_update on public.moderation_flags
+  for update
+  using (public.is_super_admin())
+  with check (public.is_super_admin());
+
+-- 7.17 platform_settings ---------------------------------------------------
+-- Settings are world-readable (needed to render public pricing) and
+-- admin-writable.
+drop policy if exists platform_settings_select on public.platform_settings;
+create policy platform_settings_select on public.platform_settings
+  for select
+  using (true);
+
+drop policy if exists platform_settings_write on public.platform_settings;
+create policy platform_settings_write on public.platform_settings
+  for all
+  using (public.is_super_admin())
+  with check (public.is_super_admin());
+
 
 -- ---------------------------------------------------------------------------
 -- 8. Realtime publication (Loop C — Req referenced by realtime sync)
@@ -711,6 +1044,62 @@ begin
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'shipments'
     ) then
       alter publication supabase_realtime add table public.shipments;
+    end if;
+    -- notifications
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'notifications'
+    ) then
+      alter publication supabase_realtime add table public.notifications;
+    end if;
+    -- disputes
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'disputes'
+    ) then
+      alter publication supabase_realtime add table public.disputes;
+    end if;
+    -- reviews
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'reviews'
+    ) then
+      alter publication supabase_realtime add table public.reviews;
+    end if;
+    -- system_logs
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'system_logs'
+    ) then
+      alter publication supabase_realtime add table public.system_logs;
+    end if;
+    -- wallets
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'wallets'
+    ) then
+      alter publication supabase_realtime add table public.wallets;
+    end if;
+    -- cms_content
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'cms_content'
+    ) then
+      alter publication supabase_realtime add table public.cms_content;
+    end if;
+    -- moderation_flags
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'moderation_flags'
+    ) then
+      alter publication supabase_realtime add table public.moderation_flags;
+    end if;
+    -- platform_settings
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'platform_settings'
+    ) then
+      alter publication supabase_realtime add table public.platform_settings;
     end if;
   end if;
 end$$;

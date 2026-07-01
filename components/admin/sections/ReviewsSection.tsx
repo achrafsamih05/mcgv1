@@ -5,6 +5,7 @@ import { Flag, Star, Trash2 } from "lucide-react";
 import type { Review } from "@/lib/admin/types";
 import { reviews as seed } from "@/lib/admin/data";
 import { Badge, Button, Panel, PanelHeader } from "../ui/primitives";
+import { LiveReviewsSection } from "./LiveReviewsSection";
 
 const statusTone: Record<Review["status"], Parameters<typeof Badge>[0]["tone"]> = {
   Published: "success",
@@ -35,7 +36,9 @@ export function ReviewsSection() {
     setList((prev) => prev.map((r) => (r.id === id ? { ...r, status: "Removed" } : r)));
 
   return (
-    <Panel>
+    <div className="space-y-6">
+      <LiveReviewsSection />
+      <Panel>
       <PanelHeader title="Reviews Audit Trail" description="Flag and erase fraudulent or defamatory feedback" />
       <ul className="divide-y divide-navy-100">
         {list.map((r) => (
@@ -66,5 +69,6 @@ export function ReviewsSection() {
         ))}
       </ul>
     </Panel>
+    </div>
   );
 }

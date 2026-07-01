@@ -1,8 +1,9 @@
 "use client";
 
-import { Bell, Menu, Search, ShieldCheck } from "lucide-react";
+import { Menu, Search, ShieldCheck } from "lucide-react";
 import { sectionTitles } from "./nav";
 import type { AdminSectionId } from "@/lib/admin/types";
+import { AdminNotificationBell } from "./AdminNotificationBell";
 
 export function Topbar({
   section,
@@ -53,14 +54,7 @@ export function Topbar({
           MFA Verified
         </span>
 
-        <button
-          type="button"
-          aria-label="Notifications"
-          className="relative cursor-pointer rounded-lg p-2 text-navy-700 hover:bg-navy-100"
-        >
-          <Bell className="h-5 w-5" aria-hidden="true" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-accent-500" />
-        </button>
+        <AdminNotificationBell />
       </div>
     </header>
   );

@@ -15,6 +15,7 @@ import type { AccountStatus, AccountType, User } from "@/lib/admin/types";
 import { users as seedUsers } from "@/lib/admin/data";
 import { Badge, Button, Panel, PanelHeader } from "../ui/primitives";
 import { Modal } from "../ui/Modal";
+import { LiveUsersSection } from "./LiveUsersSection";
 
 const statusTone: Record<AccountStatus, Parameters<typeof Badge>[0]["tone"]> = {
   Active: "success",
@@ -85,7 +86,9 @@ export function UsersSection() {
   };
 
   return (
-    <Panel>
+    <div className="space-y-6">
+      <LiveUsersSection />
+      <Panel>
       <PanelHeader
         title="All Accounts"
         description={`${filtered.length} of ${data.length} users`}
@@ -283,6 +286,7 @@ export function UsersSection() {
         </div>
       </Modal>
     </Panel>
+    </div>
   );
 }
 

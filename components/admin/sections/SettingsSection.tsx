@@ -4,6 +4,7 @@ import { useState } from "react";
 import { KeyRound, Save, ShieldCheck } from "lucide-react";
 import { Button, Panel, PanelHeader, Toggle } from "../ui/primitives";
 import { BarChart, ChartLegend, LineChart } from "../ui/charts";
+import { LiveSettingsSection } from "./LiveSettingsSection";
 
 type StaffRole = { id: string; name: string; role: string; mfa: boolean; canDelete: boolean };
 
@@ -27,6 +28,9 @@ export function SettingsSection() {
 
   return (
     <div className="space-y-5">
+      {/* LIVE — commission structure bound to platform_settings */}
+      <LiveSettingsSection />
+
       {/* System config */}
       <Panel>
         <PanelHeader title="System Configuration" description="Global platform identity" />

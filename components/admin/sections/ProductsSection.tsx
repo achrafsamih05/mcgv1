@@ -5,6 +5,7 @@ import { Eye, EyeOff, Pencil, Search, Trash2 } from "lucide-react";
 import type { Product, ProductStatus } from "@/lib/admin/types";
 import { products as seed } from "@/lib/admin/data";
 import { Badge, Button, Panel, PanelHeader } from "../ui/primitives";
+import { LiveProductsSection } from "./LiveProductsSection";
 
 const statusTone: Record<ProductStatus, Parameters<typeof Badge>[0]["tone"]> = {
   Live: "success",
@@ -33,7 +34,9 @@ export function ProductsSection() {
   const remove = (id: string) => setList((prev) => prev.filter((p) => p.id !== id));
 
   return (
-    <Panel>
+    <div className="space-y-6">
+      <LiveProductsSection />
+      <Panel>
       <PanelHeader
         title="Platform Catalogue"
         description={`${filtered.length} listings`}
@@ -109,5 +112,6 @@ export function ProductsSection() {
         </table>
       </div>
     </Panel>
+    </div>
   );
 }
